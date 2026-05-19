@@ -50,7 +50,7 @@ st.divider()
 ASSETS = {
     "S&P 500 (US)": "SPY",
     "Nasdaq 100 (US)": "QQQ",
-    "Hang Seng (HK)": "^2800.HK",
+    "Hang Seng (HK)": "2800.HK",
     "CSI 300 (CN)": "000300.SS",
     "Gold": "GC=F",
     "Crude Oil": "CL=F",
@@ -58,10 +58,10 @@ ASSETS = {
     "Dollar Index": "DX-Y.NYB"
 }
 
-# ===== 🆕 缓存数据,加载速度提升 10 倍 =====
-@st.cache_data(ttl=300)  # 缓存 5 分钟
+# ===== 缓存数据,加载速度提升 10 倍 =====
+@st.cache_data(ttl=300)
 def load_data(ticker, period):
-    """拉取数据并缓存,避免重复请求"""
+    """拉取数据并缓存"""
     data = yf.download(ticker, period=period, auto_adjust=True, multi_level_index=False, progress=False)
     return data
 
@@ -77,10 +77,10 @@ with st.sidebar:
     )
     
     period = st.selectbox(
-       "Time Period",
-    options=["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"],
-    index=2,
-    help="'max' shows the longest available history for each asset"
+        "Time Period",
+        options=["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"],
+        index=2,
+        help="'max' shows the longest available history"
     )
     
     normalize = st.checkbox(
@@ -88,24 +88,29 @@ with st.sidebar:
         value=True
     )
     
+    log_scale = st.checkbox(
+        "Log scale (recommended for long periods)",
+        value=False,
+        help="Use logarithmic Y-axis when growth rates differ greatly"
+    )
+    
     st.divider()
     
-    # 🆕 添加产品介绍
     with st.expander("ℹ️ About this dashboard"):
         st.markdown("""
-        **Cross-Market Macro Dashboard** tracks 8 global assets across:
+        **Cross-Market Macro Dashboard** tracks 8 global assets:
         - 🇺🇸 US Equities
         - 🇨🇳 Chinese Markets
         - 🇭🇰 Hong Kong
         - 🥇 Commodities
         - ₿ Cryptocurrency
         
-        Built with Python, Streamlit, and yfinance.
+        Built with Python, Streamlit, and Claude API.
         """)
     
     st.caption("Made by Yida Tong | UIUC Finance '26")
 
-# 检查
+# ===== 检查 =====
 if len(selected_assets) == 0:
     st.warning("👈 Please select at least one asset from the sidebar.")
     st.stop()
@@ -123,29 +128,25 @@ with st.spinner(f"Loading {len(selected_assets)} assets..."):
         except Exception as e:
             st.error(f"Error loading {asset_name}: {e}")
 
-# ===== 关键:对齐到所有资产都有数据的时间范围 =====
+# ===== 对齐时间范围(关键:避免不同资产历史长度不同的 NaN 问题) =====
 if normalize and len(all_data.columns) > 1:
-    # 找到所有资产都有数据的"共同起点"
-    all_data = all_data.dropna()  # 去掉任何资产缺数据的日期
-    
+    all_data = all_data.dropna()
     if len(all_data) == 0:
-        st.error("⚠️ No overlapping date range across selected assets. Try shorter period or fewer assets.")
+        st.error("⚠️ No overlapping date range. Try shorter period or fewer assets.")
         st.stop()
 
 if len(all_data.columns) == 0:
     st.error("No data loaded. Please try again.")
     st.stop()
 
-# ===== 🆕 顶部 KPI 卡片 =====
+# ===== Quick Stats KPI =====
 st.subheader("📊 Quick Stats")
 
-# 算每个资产的阶段收益率
 returns_summary = {}
 for col in all_data.columns:
-    # 取第一个非 NaN 的值作为起点
     series = all_data[col].dropna()
     if len(series) < 2:
-        continue  # 数据不够,跳过这个资产
+        continue
     start_val = series.iloc[0]
     end_val = series.iloc[-1]
     if pd.isna(start_val) or pd.isna(end_val) or start_val == 0:
@@ -153,19 +154,19 @@ for col in all_data.columns:
     pct = (end_val - start_val) / start_val * 100
     returns_summary[col] = pct
 
-# 显示在卡片里 (最多 4 个)
-cols = st.columns(min(4, len(returns_summary)))
-top_assets = list(returns_summary.items())[:4]
-for i, (asset, pct) in enumerate(top_assets):
-    with cols[i]:
-        # 取最新非 NaN 的值
-        latest_value = all_data[asset].dropna().iloc[-1] if len(all_data[asset].dropna()) > 0 else 0
-        st.metric(
-            label=asset,
-            value=f"${latest_value:,.2f}",
-            delta=f"{pct:+.2f}%",
-            delta_color="normal"
-        )
+if len(returns_summary) > 0:
+    cols = st.columns(min(4, len(returns_summary)))
+    top_assets = list(returns_summary.items())[:4]
+    for i, (asset, pct) in enumerate(top_assets):
+        with cols[i]:
+            clean_series = all_data[asset].dropna()
+            latest_value = clean_series.iloc[-1] if len(clean_series) > 0 else 0
+            st.metric(
+                label=asset,
+                value=f"${latest_value:,.2f}",
+                delta=f"{pct:+.2f}%",
+                delta_color="normal"
+            )
 
 st.divider()
 
@@ -173,12 +174,12 @@ st.divider()
 st.subheader(f"📈 Performance Comparison ({period})")
 
 fig = go.Figure()
-
-# 🆕 给不同资产分配专业配色
 colors = ["#00D4FF", "#FF6B6B", "#FFD93D", "#6BCF7F", "#A78BFA", "#FB7185", "#34D399", "#F472B6"]
 
 for i, asset_name in enumerate(all_data.columns):
-    close_series = all_data[asset_name]
+    close_series = all_data[asset_name].dropna()
+    if len(close_series) == 0:
+        continue
     
     if normalize:
         plot_series = (close_series / close_series.iloc[0]) * 100
@@ -186,7 +187,7 @@ for i, asset_name in enumerate(all_data.columns):
         plot_series = close_series
     
     fig.add_trace(go.Scatter(
-        x=all_data.index,
+        x=close_series.index,
         y=plot_series,
         mode="lines",
         name=asset_name,
@@ -212,15 +213,17 @@ fig.update_layout(
     plot_bgcolor="#0e1117",
     paper_bgcolor="#0e1117"
 )
+
+# 对数刻度
+if log_scale:
+    fig.update_yaxes(type="log")
+
 fig.update_xaxes(showgrid=False)
 fig.update_yaxes(showgrid=True, gridcolor="#2a2a3a")
 
 st.plotly_chart(fig, width="stretch")
 
-# ===== 双栏布局:左边表格,右边热力图 =====
-col_left, col_right = st.columns([1, 1])
-
-# ===== 双栏布局:左边表格,右边热力图 =====
+# ===== 双栏:Performance Ranking + Correlation =====
 col_left, col_right = st.columns([1, 1])
 
 with col_left:
@@ -231,7 +234,11 @@ with col_left:
             series = all_data[col].dropna()
             if len(series) < 2:
                 continue
-            pct = (series.iloc[-1] / series.iloc[0] - 1) * 100
+            start_val = series.iloc[0]
+            end_val = series.iloc[-1]
+            if pd.isna(start_val) or pd.isna(end_val) or start_val == 0:
+                continue
+            pct = (end_val / start_val - 1) * 100
             if pd.isna(pct):
                 continue
             performance_data.append({"Asset": col, "Return %": pct})
@@ -239,130 +246,118 @@ with col_left:
         if len(performance_data) > 0:
             performance = pd.DataFrame(performance_data)
             performance = performance.sort_values("Return %", ascending=False).reset_index(drop=True)
-            performance["Return %"] = performance["Return %"].apply(lambda x: f"{x:+.2f}%")
-            
+            performance["Return %"] = performance["Return %"].apply(
+                lambda x: f"{x:+.2f}%" if pd.notna(x) else "N/A"
+            )
             st.dataframe(
                 performance,
                 width="stretch",
                 hide_index=True,
                 height=300
             )
-
-        performance = performance.sort_values("Return %", ascending=False).reset_index(drop=True)
-        performance["Return %"] = performance["Return %"].apply(lambda x: f"{x:+.2f}%")
-        
-        st.dataframe(
-            performance,
-            width="stretch",
-            hide_index=True,
-            height=300
-        )
+        else:
+            st.info("No valid performance data.")
 
 with col_right:
     st.subheader("🔥 Correlation")
     if len(all_data.columns) >= 2:
         returns = all_data.pct_change().dropna()
-        corr_matrix = returns.corr()
-        
-        fig_corr = px.imshow(
-            corr_matrix,
-            text_auto=".2f",
-            aspect="auto",
-            color_continuous_scale="RdBu_r",
-            zmin=-1,
-            zmax=1
-        )
-        fig_corr.update_layout(
-            template="plotly_dark",
-            height=300,
-            margin=dict(l=0, r=0, t=10, b=0),
-            coloraxis_showscale=False
-        )
-        st.plotly_chart(fig_corr, width="stretch")
+        if len(returns) > 0:
+            corr_matrix = returns.corr()
+            fig_corr = px.imshow(
+                corr_matrix,
+                text_auto=".2f",
+                aspect="auto",
+                color_continuous_scale="RdBu_r",
+                zmin=-1,
+                zmax=1
+            )
+            fig_corr.update_layout(
+                template="plotly_dark",
+                height=300,
+                margin=dict(l=0, r=0, t=10, b=0),
+                coloraxis_showscale=False
+            )
+            st.plotly_chart(fig_corr, width="stretch")
+        else:
+            st.info("Not enough data for correlation.")
     else:
         st.info("Select 2+ assets")
 
-# ===== 智能解读 =====
-if len(all_data.columns) >= 2:
+# ===== Quick Insights =====
+if len(all_data.columns) >= 2 and len(returns_summary) >= 2:
     st.divider()
     st.subheader("💡 Quick Insights")
     
     returns = all_data.pct_change().dropna()
-    corr_matrix = returns.corr()
-    
-    # 找出最高和最低相关性
-    corr_pairs = []
-    for i in range(len(corr_matrix.columns)):
-        for j in range(i + 1, len(corr_matrix.columns)):
-            corr_pairs.append({
-                "pair": f"{corr_matrix.columns[i]} ↔ {corr_matrix.columns[j]}",
-                "value": corr_matrix.iloc[i, j]
-            })
-    
-    if corr_pairs:
-        corr_pairs_sorted = sorted(corr_pairs, key=lambda x: x["value"], reverse=True)
-        highest = corr_pairs_sorted[0]
-        lowest = corr_pairs_sorted[-1]
+    if len(returns) > 0:
+        corr_matrix = returns.corr()
         
-        best_performer = max(returns_summary.items(), key=lambda x: x[1])
-        worst_performer = min(returns_summary.items(), key=lambda x: x[1])
+        corr_pairs = []
+        for i in range(len(corr_matrix.columns)):
+            for j in range(i + 1, len(corr_matrix.columns)):
+                value = corr_matrix.iloc[i, j]
+                if pd.notna(value):
+                    corr_pairs.append({
+                        "pair": f"{corr_matrix.columns[i]} ↔ {corr_matrix.columns[j]}",
+                        "value": value
+                    })
         
-        insight_col1, insight_col2 = st.columns(2)
-        
-        with insight_col1:
-            st.success(f"🚀 **Best performer**: {best_performer[0]} ({best_performer[1]:+.2f}%)")
-            st.info(f"🔗 **Most synced**: {highest['pair']} (corr {highest['value']:.2f})")
-        
-        with insight_col2:
-            st.error(f"📉 **Worst performer**: {worst_performer[0]} ({worst_performer[1]:+.2f}%)")
-            st.info(f"⚖️ **Most diverging**: {lowest['pair']} (corr {lowest['value']:.2f})")
+        if corr_pairs:
+            corr_pairs_sorted = sorted(corr_pairs, key=lambda x: x["value"], reverse=True)
+            highest = corr_pairs_sorted[0]
+            lowest = corr_pairs_sorted[-1]
+            
+            best_performer = max(returns_summary.items(), key=lambda x: x[1])
+            worst_performer = min(returns_summary.items(), key=lambda x: x[1])
+            
+            insight_col1, insight_col2 = st.columns(2)
+            with insight_col1:
+                st.success(f"🚀 **Best performer**: {best_performer[0]} ({best_performer[1]:+.2f}%)")
+                st.info(f"🔗 **Most synced**: {highest['pair']} (corr {highest['value']:.2f})")
+            with insight_col2:
+                st.error(f"📉 **Worst performer**: {worst_performer[0]} ({worst_performer[1]:+.2f}%)")
+                st.info(f"⚖️ **Most diverging**: {lowest['pair']} (corr {lowest['value']:.2f})")
 
-# ===== 原始数据 =====
+# ===== Raw Data =====
 with st.expander("📋 View Raw Data"):
     st.dataframe(all_data, width="stretch")
 
-# ===== 底部签名 =====
-st.divider()
-st.caption("⚠️ This dashboard is for educational purposes only. Not investment advice. Data via Yahoo Finance.")
-# ===== 🤖 AI Market Commentary =====
+# ===== AI Market Commentary =====
 st.divider()
 st.subheader("🤖 AI Market Commentary")
 st.caption("Click below to get AI-generated insights on the current market state")
 
-# 初始化 Anthropic 客户端
 api_key = os.getenv("ANTHROPIC_API_KEY")
 
-
-
 if not api_key:
-    st.error("⚠️ ANTHROPIC_API_KEY not found in .env file")
+    st.error("⚠️ ANTHROPIC_API_KEY not found")
 else:
     if st.button("✨ Generate AI Analysis", type="primary"):
         with st.spinner("AI is analyzing the markets..."):
             try:
-                # 准备给 AI 看的数据摘要
                 returns = all_data.pct_change().dropna()
                 corr_matrix = returns.corr()
                 
-                # 算每个资产的总收益率
                 summary_lines = []
                 for col in all_data.columns:
-                    pct = (all_data[col].iloc[-1] / all_data[col].iloc[0] - 1) * 100
-                    summary_lines.append(f"- {col}: {pct:+.2f}%")
-                
+                    series = all_data[col].dropna()
+                    if len(series) < 2:
+                        continue
+                    pct = (series.iloc[-1] / series.iloc[0] - 1) * 100
+                    if pd.notna(pct):
+                        summary_lines.append(f"- {col}: {pct:+.2f}%")
                 performance_summary = "\n".join(summary_lines)
                 
-                # 找出最高 / 最低相关性
                 corr_insights = []
                 for i in range(len(corr_matrix.columns)):
                     for j in range(i + 1, len(corr_matrix.columns)):
                         pair = f"{corr_matrix.columns[i]} / {corr_matrix.columns[j]}"
                         value = corr_matrix.iloc[i, j]
-                        corr_insights.append(f"- {pair}: {value:.2f}")
-                
+                        if pd.notna(value):
+                            corr_insights.append(f"- {pair}: {value:.2f}")
                 correlation_summary = "\n".join(corr_insights)
                 
-                # 组装 prompt
                 prompt = f"""You are a senior macro analyst. Based on the following cross-market data over the {period} period, write a concise market commentary (200-300 words).
 
 PERFORMANCE BY ASSET:
@@ -372,36 +367,32 @@ CROSS-ASSET CORRELATIONS:
 {correlation_summary}
 
 Please write a market commentary that:
-1. Identifies the dominant market narrative (e.g., "risk-on rally", "flight to safety", "regional decoupling")
+1. Identifies the dominant market narrative
 2. Highlights which assets are leading and lagging
 3. Notes any interesting correlations or divergences
 4. Offers 1-2 thoughtful observations a portfolio manager would care about
 
-Use a professional tone. Be specific about numbers. Avoid generic language."""
+Use a professional tone. Be specific about numbers."""
 
-                # 调用 Claude API
                 client = Anthropic(api_key=api_key)
-                
                 message = client.messages.create(
                     model="claude-sonnet-4-6",
                     max_tokens=1024,
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ]
+                    messages=[{"role": "user", "content": prompt}]
                 )
                 
-                # 显示 AI 的回复
                 ai_response = message.content[0].text
-                
                 st.markdown("### 📝 AI Analysis")
                 st.markdown(ai_response)
                 
-                # 显示一下用了多少 token (方便监控花费)
                 with st.expander("📊 API Usage"):
-                    st.caption(f"Input tokens: {message.usage.input_tokens} | Output tokens: {message.usage.output_tokens}")
+                    st.caption(f"Input: {message.usage.input_tokens} | Output: {message.usage.output_tokens}")
                     cost = (message.usage.input_tokens * 3 + message.usage.output_tokens * 15) / 1_000_000
-                    st.caption(f"Estimated cost: ${cost:.4f}")
+                    st.caption(f"Cost: ${cost:.4f}")
                 
             except Exception as e:
                 st.error(f"Error calling Claude API: {e}")
-                st.info("Common issues: API key invalid, no credit, or network problem.")
+
+# ===== 底部 =====
+st.divider()
+st.caption("⚠️ For educational purposes only. Not investment advice. Data via Yahoo Finance.")
