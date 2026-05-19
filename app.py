@@ -132,8 +132,14 @@ st.subheader("📊 Quick Stats")
 # 算每个资产的阶段收益率
 returns_summary = {}
 for col in all_data.columns:
-    start_val = all_data[col].iloc[0]
-    end_val = all_data[col].iloc[-1]
+    # 取第一个非 NaN 的值作为起点
+    series = all_data[col].dropna()
+    if len(series) < 2:
+        continue  # 数据不够,跳过这个资产
+    start_val = series.iloc[0]
+    end_val = series.iloc[-1]
+    if pd.isna(start_val) or pd.isna(end_val) or start_val == 0:
+        continue
     pct = (end_val - start_val) / start_val * 100
     returns_summary[col] = pct
 
@@ -142,13 +148,13 @@ cols = st.columns(min(4, len(returns_summary)))
 top_assets = list(returns_summary.items())[:4]
 for i, (asset, pct) in enumerate(top_assets):
     with cols[i]:
-        # 🆕 涨跌颜色:涨绿跌红
-        delta_color = "normal"  # streamlit 自动绿涨红跌
+        # 取最新非 NaN 的值
+        latest_value = all_data[asset].dropna().iloc[-1] if len(all_data[asset].dropna()) > 0 else 0
         st.metric(
             label=asset,
-            value=f"${all_data[asset].iloc[-1]:,.2f}",
+            value=f"${latest_value:,.2f}",
             delta=f"{pct:+.2f}%",
-            delta_color=delta_color
+            delta_color="normal"
         )
 
 st.divider()
