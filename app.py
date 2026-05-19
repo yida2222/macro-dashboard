@@ -50,7 +50,7 @@ st.divider()
 ASSETS = {
     "S&P 500 (US)": "SPY",
     "Nasdaq 100 (US)": "QQQ",
-    "Hang Seng (HK)": "^HSI",
+    "Hang Seng (HK)": "^2800.HK",
     "CSI 300 (CN)": "000300.SS",
     "Gold": "GC=F",
     "Crude Oil": "CL=F",
@@ -77,9 +77,10 @@ with st.sidebar:
     )
     
     period = st.selectbox(
-        "Time Period",
-        options=["1mo", "3mo", "6mo", "1y", "2y", "5y"],
-        index=2
+       "Time Period",
+    options=["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"],
+    index=2,
+    help="'max' shows the longest available history for each asset"
     )
     
     normalize = st.checkbox(
@@ -121,6 +122,15 @@ with st.spinner(f"Loading {len(selected_assets)} assets..."):
                 all_data[asset_name] = data["Close"]
         except Exception as e:
             st.error(f"Error loading {asset_name}: {e}")
+
+# ===== 关键:对齐到所有资产都有数据的时间范围 =====
+if normalize and len(all_data.columns) > 1:
+    # 找到所有资产都有数据的"共同起点"
+    all_data = all_data.dropna()  # 去掉任何资产缺数据的日期
+    
+    if len(all_data) == 0:
+        st.error("⚠️ No overlapping date range across selected assets. Try shorter period or fewer assets.")
+        st.stop()
 
 if len(all_data.columns) == 0:
     st.error("No data loaded. Please try again.")
@@ -210,13 +220,34 @@ st.plotly_chart(fig, width="stretch")
 # ===== 双栏布局:左边表格,右边热力图 =====
 col_left, col_right = st.columns([1, 1])
 
+# ===== 双栏布局:左边表格,右边热力图 =====
+col_left, col_right = st.columns([1, 1])
+
 with col_left:
     st.subheader("📈 Performance Ranking")
     if len(all_data.columns) > 0:
-        performance = pd.DataFrame({
-            "Asset": all_data.columns,
-            "Return %": [(all_data[col].iloc[-1] / all_data[col].iloc[0] - 1) * 100 for col in all_data.columns]
-        })
+        performance_data = []
+        for col in all_data.columns:
+            series = all_data[col].dropna()
+            if len(series) < 2:
+                continue
+            pct = (series.iloc[-1] / series.iloc[0] - 1) * 100
+            if pd.isna(pct):
+                continue
+            performance_data.append({"Asset": col, "Return %": pct})
+        
+        if len(performance_data) > 0:
+            performance = pd.DataFrame(performance_data)
+            performance = performance.sort_values("Return %", ascending=False).reset_index(drop=True)
+            performance["Return %"] = performance["Return %"].apply(lambda x: f"{x:+.2f}%")
+            
+            st.dataframe(
+                performance,
+                width="stretch",
+                hide_index=True,
+                height=300
+            )
+
         performance = performance.sort_values("Return %", ascending=False).reset_index(drop=True)
         performance["Return %"] = performance["Return %"].apply(lambda x: f"{x:+.2f}%")
         
