@@ -319,6 +319,159 @@ if len(all_data.columns) >= 2 and len(returns_summary) >= 2:
                 st.error(f"📉 **Worst performer**: {worst_performer[0]} ({worst_performer[1]:+.2f}%)")
                 st.info(f"⚖️ **Most diverging**: {lowest['pair']} (corr {lowest['value']:.2f})")
 
+# ===== 🎯 Pairs Trading Analysis =====
+if len(all_data.columns) >= 2:
+    st.divider()
+    st.subheader("🎯 Pairs Trading Analysis")
+    st.caption("Statistical analysis for mean-reversion strategies. Identifies cointegrated pairs with tradable z-score divergence.")
+
+    from statsmodels.tsa.stattools import coint
+    from statsmodels.regression.linear_model import OLS
+    from statsmodels.tools import add_constant
+    import numpy as np
+
+    def calculate_half_life(spread):
+        """用 OLS 估计 OU 过程的半衰期"""
+        spread_lag = spread.shift(1).dropna()
+        spread_diff = spread.diff().dropna()
+        common_idx = spread_lag.index.intersection(spread_diff.index)
+        if len(common_idx) < 30:
+            return None
+        spread_lag = spread_lag.loc[common_idx]
+        spread_diff = spread_diff.loc[common_idx]
+        try:
+            model = OLS(spread_diff.values, add_constant(spread_lag.values)).fit()
+            beta = model.params[1]
+            if beta >= 0:
+                return None
+            half_life = -np.log(2) / beta
+            return half_life if 0 < half_life < 1000 else None
+        except Exception:
+            return None
+
+    pairs_data = []
+
+    for i in range(len(all_data.columns)):
+        for j in range(i + 1, len(all_data.columns)):
+            col_a = all_data.columns[i]
+            col_b = all_data.columns[j]
+
+            series_a = all_data[col_a].dropna()
+            series_b = all_data[col_b].dropna()
+
+            common_idx = series_a.index.intersection(series_b.index)
+            if len(common_idx) < 60:
+                continue
+
+            series_a = series_a.loc[common_idx]
+            series_b = series_b.loc[common_idx]
+
+            try:
+                log_a = np.log(series_a.values)
+                log_b = np.log(series_b.values)
+
+                model = OLS(log_a, add_constant(log_b)).fit()
+                alpha = model.params[0]
+                beta = model.params[1]
+
+                spread = pd.Series(log_a - beta * log_b - alpha, index=series_a.index)
+
+                _, coint_pvalue, _ = coint(series_a.values, series_b.values)
+
+                spread_mean = spread.mean()
+                spread_std = spread.std()
+                if spread_std == 0:
+                    continue
+                current_z = (spread.iloc[-1] - spread_mean) / spread_std
+
+                returns_a = series_a.pct_change().dropna()
+                returns_b = series_b.pct_change().dropna()
+                common_ret = returns_a.index.intersection(returns_b.index)
+                correlation = returns_a.loc[common_ret].corr(returns_b.loc[common_ret]) if len(common_ret) > 10 else np.nan
+
+                hl = calculate_half_life(spread)
+
+                if coint_pvalue < 0.05 and abs(current_z) > 2:
+                    signal = "🔴 Strong tradable"
+                elif coint_pvalue < 0.05 and abs(current_z) > 1:
+                    signal = "🟡 Mild (cointegrated)"
+                elif coint_pvalue < 0.1:
+                    signal = "🟢 At equilibrium"
+                else:
+                    signal = "⚪ Not cointegrated"
+
+                pairs_data.append({
+                    "Pair": f"{col_a} ↔ {col_b}",
+                    "Correlation": correlation,
+                    "Coint p-value": coint_pvalue,
+                    "Hedge β": beta,
+                    "Z-Score": current_z,
+                    "Half-life (days)": hl,
+                    "Signal": signal
+                })
+            except Exception:
+                continue
+
+    if len(pairs_data) > 0:
+        pairs_df = pd.DataFrame(pairs_data)
+        pairs_df["abs_z"] = pairs_df["Z-Score"].abs()
+        pairs_df = pairs_df.sort_values("abs_z", ascending=False).drop(columns=["abs_z"]).reset_index(drop=True)
+
+        display_df = pairs_df.copy()
+        display_df["Correlation"] = display_df["Correlation"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A")
+        display_df["Coint p-value"] = display_df["Coint p-value"].apply(lambda x: f"{x:.3f}")
+        display_df["Hedge β"] = display_df["Hedge β"].apply(lambda x: f"{x:.2f}")
+        display_df["Z-Score"] = display_df["Z-Score"].apply(lambda x: f"{x:+.2f}")
+        display_df["Half-life (days)"] = display_df["Half-life (days)"].apply(
+            lambda x: f"{x:.1f}" if x is not None and pd.notna(x) else "N/A"
+        )
+
+        st.dataframe(display_df, width="stretch", hide_index=True)
+
+        tradable = pairs_df[(pairs_df["Coint p-value"] < 0.05) & (pairs_df["Z-Score"].abs() > 2)]
+
+        if len(tradable) > 0:
+            top = tradable.iloc[0]
+            asset_a, asset_b = top["Pair"].split(" ↔ ")
+            direction = "above" if top["Z-Score"] > 0 else "below"
+            trade_idea = f"Short {asset_a}, Long {asset_b}" if top["Z-Score"] > 0 else f"Long {asset_a}, Short {asset_b}"
+            hl_text = f"~{top['Half-life (days)']:.0f} days" if top['Half-life (days)'] is not None and pd.notna(top['Half-life (days)']) else "unknown"
+
+            st.warning(
+                f"⚠️ **Strongest tradable signal**: `{top['Pair']}` — "
+                f"cointegrated (p={top['Coint p-value']:.3f}), "
+                f"current spread is **{abs(top['Z-Score']):.2f}σ {direction}** historical mean.\n\n"
+                f"**Mean-reversion play**: {trade_idea} with hedge ratio β = {top['Hedge β']:.2f}. "
+                f"Estimated half-life: {hl_text}.\n\n"
+                f"*Educational only — not investment advice.*"
+            )
+        elif len(pairs_df[pairs_df["Coint p-value"] < 0.05]) == 0:
+            st.info("ℹ️ No pairs are statistically cointegrated in this time window. Try a longer period (1y+) or different assets.")
+
+        with st.expander("ℹ️ How to read this table"):
+            st.markdown("""
+            **Cointegration p-value**:
+            - `< 0.05` → ✅ Statistically cointegrated, pair is tradable
+            - `0.05 - 0.10` → ⚠️ Weakly cointegrated
+            - `> 0.10` → ❌ Not cointegrated; do not trade as a pair
+
+            **Hedge Ratio (β)**: OLS coefficient from `log(A) = α + β·log(B) + ε`.
+            For every $1 long in A, hold $β short in B to neutralize systematic risk.
+
+            **Z-Score**: How many standard deviations the current spread is from its historical mean.
+            Trade signal requires **both** cointegrated AND |Z| > 2.
+
+            **Half-life**: Estimated days for the spread to revert halfway to the mean.
+            - `< 10 days` → ✅ Excellent
+            - `10-30 days` → 🟡 Tradable but slow
+            - `> 30 days` → ❌ Capital cost likely exceeds expected return
+
+            **Why this is better than simple correlation**:
+            Two assets can have high correlation but diverge long-term (not cointegrated).
+            Pairs trading on correlation alone loses money when the "pair" is actually drifting apart.
+            """)
+    else:
+        st.info("Need at least 60 days of overlapping data across assets to compute cointegration.")
 # ===== Raw Data =====
 with st.expander("📋 View Raw Data"):
     st.dataframe(all_data, width="stretch")
