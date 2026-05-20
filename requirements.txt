@@ -4,3 +4,6 @@ plotly
 pandas
 anthropic
 python-dotenv
+statsmodels
+pytz
+streamlit-autorefresh
