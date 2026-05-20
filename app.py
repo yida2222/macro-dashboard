@@ -1,3 +1,4 @@
+from streamlit_autorefresh import st_autorefresh
 import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
@@ -6,6 +7,9 @@ import pandas as pd
 import os
 from anthropic import Anthropic
 from dotenv import load_dotenv
+from datetime import datetime
+import pytz
+from streamlit_autorefresh import st_autorefresh
 
 # 加载 .env 文件里的密钥
 load_dotenv()
@@ -37,6 +41,20 @@ st.markdown("""
 col_title, col_status = st.columns([3, 1])
 with col_title:
     st.title("📊 Cross-Market Macro Dashboard")
+    # ===== 实时刷新机制 =====
+# 每 5 分钟自动重新运行整个页面
+st_autorefresh(interval=5 * 60 * 1000, key="auto_refresh")
+
+# 显示数据更新时间
+et_tz = pytz.timezone('America/New_York')
+now_et = datetime.now(et_tz)
+col_time, col_btn = st.columns([3, 1])
+with col_time:
+    st.caption(f"🕐 Last refreshed: **{now_et.strftime('%Y-%m-%d %H:%M:%S ET')}** · Market data delayed ~15-20 min · Auto-refresh every 5 min")
+with col_btn:
+    if st.button("🔄 Refresh now", width="stretch"):
+        st.cache_data.clear()
+        st.rerun()
     st.caption("Real-time analytics across US equities, Chinese stocks, commodities, and crypto")
 with col_status:
     st.markdown(
@@ -59,7 +77,7 @@ ASSETS = {
 }
 
 # ===== 缓存数据,加载速度提升 10 倍 =====
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60)
 def load_data(ticker, period):
     """拉取数据并缓存"""
     data = yf.download(ticker, period=period, auto_adjust=True, multi_level_index=False, progress=False)
